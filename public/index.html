@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MailProbe - Email Verification</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #FBFAF5;
+            --black: #000;
+            --pink: #FF4081;
+            --yellow: #FDF3C4;
+            --green: #4CAF50;
+            --red: #F44336;
+            --amber: #FF9800;
+            --grey: #9E9E9E;
+        }
+
+        body {
+            font-family: 'Space Mono', monospace;
+            background: var(--bg);
+            color: var(--black);
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 36px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 20px;
+        }
+
+        .mode-banner {
+            padding: 15px 20px;
+            border: 3px solid var(--black);
+            margin-bottom: 20px;
+            font-weight: 700;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .mode-banner.full {
+            background: var(--green);
+            color: white;
+        }
+
+        .mode-banner.dns-only {
+            background: var(--amber);
+            color: var(--black);
+        }
+
+        .mode-banner button {
+            background: var(--bg);
+            border: 2px solid var(--black);
+            padding: 8px 16px;
+            font-family: 'Space Mono', monospace;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 3px 3px 0 var(--black);
+        }
+
+        .mode-banner button:active {
+            transform: translate(2px, 2px);
+            box-shadow: 1px 1px 0 var(--black);
+        }
+
+        .input-section {
+            margin-bottom: 30px;
+        }
+
+        label {
+            display: block;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 15px;
+            border: 3px solid var(--black);
+            background: white;
+            font-family: 'Space Mono', monospace;
+            font-size: 14px;
+            resize: vertical;
+        }
+
+        textarea:focus {
+            outline: none;
+            background: var(--yellow);
+        }
+
+        .button {
+            background: var(--pink);
+            color: white;
+            border: 3px solid var(--black);
+            padding: 12px 30px;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+            text-transform: uppercase;
+            cursor: pointer;
+            box-shadow: 6px 6px 0 var(--black);
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .button:hover {
+            background: #E91E63;
+        }
+
+        .button:active {
+            transform: translate(2px, 2px);
+            box-shadow: 4px 4px 0 var(--black);
+        }
+
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .button.secondary {
+            background: var(--bg);
+            color: var(--black);
+        }
+
+        .results-section {
+            display: none;
+        }
+
+        .results-section.active {
+            display: block;
+        }
+
+        .results-header {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 24px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 20px;
+        }
+
+        .filters {
+            display: flex;
+            gap: 0;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .filter-tab {
+            background: var(--bg);
+            border: 3px solid var(--black);
+            border-right: none;
+            padding: 12px 24px;
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .filter-tab:last-child {
+            border-right: 3px solid var(--black);
+        }
+
+        .filter-tab.active {
+            background: var(--black);
+            color: white;
+        }
+
+        .filter-tab .count {
+            margin-left: 8px;
+            opacity: 0.7;
+        }
+
+        .export-buttons {
+            margin-bottom: 20px;
+        }
+
+        .results-table-container {
+            border: 3px solid var(--black);
+            background: white;
+            overflow-x: auto;
+            margin-bottom: 20px;
+        }
+
+        .results-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .results-table thead {
+            background: var(--black);
+            color: white;
+        }
+
+        .results-table th {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 15px;
+            text-align: left;
+            border-right: 2px solid #333;
+        }
+
+        .results-table th:last-child {
+            border-right: none;
+        }
+
+        .results-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #ddd;
+            border-right: 1px solid #ddd;
+            font-size: 13px;
+        }
+
+        .results-table td:last-child {
+            border-right: none;
+        }
+
+        .results-table tr:nth-child(even) {
+            background: #FAFAFA;
+        }
+
+        .results-table tr:hover {
+            background: var(--yellow);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border: 2px solid var(--black);
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .status-badge.valid {
+            background: var(--green);
+            color: white;
+        }
+
+        .status-badge.invalid {
+            background: var(--red);
+            color: white;
+        }
+
+        .status-badge.risky {
+            background: var(--amber);
+            color: white;
+        }
+
+        .status-badge.unknown {
+            background: var(--grey);
+            color: white;
+        }
+
+        .info-box {
+            padding: 15px 20px;
+            border: 2px solid var(--black);
+            background: #E3F2FD;
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--pink);
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 24px;
+            }
+
+            .filters {
+                flex-direction: column;
+            }
+
+            .filter-tab {
+                border-right: 3px solid var(--black);
+                border-bottom: none;
+            }
+
+            .filter-tab:last-child {
+                border-bottom: 3px solid var(--black);
+            }
+
+            .results-table {
+                font-size: 11px;
+            }
+
+            .results-table th,
+            .results-table td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📧 MailProbe</h1>
+
+        <div id="mode-banner" class="mode-banner dns-only">
+            <span id="mode-text">Checking port 25 availability...</span>
+            <button onclick="recheckMode()">RE-CHECK</button>
+        </div>
+
+        <div class="input-section">
+            <label for="emails-input">Email Addresses (one per line, or comma/semicolon separated)</label>
+            <textarea id="emails-input" placeholder="example@domain.com&#10;user@company.org&#10;test@example.com"></textarea>
+            <br>
+            <button class="button" onclick="checkEmails()">CHECK</button>
+            <button class="button secondary" onclick="clearForm()">CLEAR</button>
+        </div>
+
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <div style="font-weight: 700;">VERIFYING EMAILS...</div>
+        </div>
+
+        <div id="results-section" class="results-section">
+            <div class="results-header">VALIDATION RESULTS</div>
+
+            <div class="filters" id="filters">
+                <div class="filter-tab active" data-filter="all" onclick="filterResults('all')">
+                    ALL <span class="count" id="count-all">0</span>
+                </div>
+                <div class="filter-tab" data-filter="valid" onclick="filterResults('valid')">
+                    VALID <span class="count" id="count-valid">0</span>
+                </div>
+                <div class="filter-tab" data-filter="invalid" onclick="filterResults('invalid')">
+                    INVALID <span class="count" id="count-invalid">0</span>
+                </div>
+                <div class="filter-tab" data-filter="risky" onclick="filterResults('risky')">
+                    RISKY <span class="count" id="count-risky">0</span>
+                </div>
+                <div class="filter-tab" data-filter="unknown" onclick="filterResults('unknown')">
+                    UNKNOWN <span class="count" id="count-unknown">0</span>
+                </div>
+            </div>
+
+            <div class="export-buttons">
+                <button class="button" onclick="exportCSV()">EXPORT CSV</button>
+                <button class="button" onclick="exportJSON()">EXPORT JSON</button>
+            </div>
+
+            <div class="results-table-container">
+                <table class="results-table">
+                    <thead>
+                        <tr>
+                            <th>EMAIL</th>
+                            <th>STATUS</th>
+                            <th>DETAILS</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-tbody">
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="info-box">
+                <strong>About UNKNOWN results:</strong> UNKNOWN is a normal result when a server blocks or delays verification. It does not mean the address is bad.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentResults = [];
+        let currentFilter = 'all';
+
+        // Check mode on load
+        async function loadMode() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                updateModeBanner(data);
+            } catch (error) {
+                console.error('Failed to load mode:', error);
+            }
+        }
+
+        function updateModeBanner(data) {
+            const banner = document.getElementById('mode-banner');
+            const text = document.getElementById('mode-text');
+            
+            text.textContent = data.message;
+            banner.className = 'mode-banner ' + (data.mode === 'full' ? 'full' : 'dns-only');
+        }
+
+        async function recheckMode() {
+            const text = document.getElementById('mode-text');
+            text.textContent = 'Rechecking...';
+            await loadMode();
+        }
+
+        async function checkEmails() {
+            const input = document.getElementById('emails-input').value.trim();
+            if (!input) {
+                alert('Please enter at least one email address');
+                return;
+            }
+
+            const loading = document.getElementById('loading');
+            const resultsSection = document.getElementById('results-section');
+
+            loading.classList.add('active');
+            resultsSection.classList.remove('active');
+
+            try {
+                const response = await fetch('/api/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ emails: input })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Server error');
+                }
+
+                const data = await response.json();
+                currentResults = data.results;
+                displayResults();
+            } catch (error) {
+                alert('Error: ' + error.message);
+            } finally {
+                loading.classList.remove('active');
+            }
+        }
+
+        function displayResults() {
+            const tbody = document.getElementById('results-tbody');
+            tbody.innerHTML = '';
+
+            // Count by status
+            const counts = { all: 0, valid: 0, invalid: 0, risky: 0, unknown: 0 };
+            currentResults.forEach(r => {
+                counts.all++;
+                counts[r.status.toLowerCase()]++;
+            });
+
+            // Update counts
+            document.getElementById('count-all').textContent = counts.all;
+            document.getElementById('count-valid').textContent = counts.valid;
+            document.getElementById('count-invalid').textContent = counts.invalid;
+            document.getElementById('count-risky').textContent = counts.risky;
+            document.getElementById('count-unknown').textContent = counts.unknown;
+
+            // Render rows
+            currentResults.forEach(result => {
+                const row = document.createElement('tr');
+                row.dataset.status = result.status.toLowerCase();
+                
+                row.innerHTML = `
+                    <td style="font-weight: 700;">${escapeHtml(result.email)}</td>
+                    <td><span class="status-badge ${result.status.toLowerCase()}">${result.status}</span></td>
+                    <td>${escapeHtml(result.reason)}</td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+
+            document.getElementById('results-section').classList.add('active');
+            filterResults(currentFilter);
+        }
+
+        function filterResults(filter) {
+            currentFilter = filter;
+            
+            // Update active tab
+            document.querySelectorAll('.filter-tab').forEach(tab => {
+                tab.classList.remove('active');
+                if (tab.dataset.filter === filter) {
+                    tab.classList.add('active');
+                }
+            });
+
+            // Filter rows
+            document.querySelectorAll('#results-tbody tr').forEach(row => {
+                if (filter === 'all' || row.dataset.status === filter) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        }
+
+        function exportCSV() {
+            const filtered = getFilteredResults();
+            const csv = ['Email,Status,Reason'];
+            filtered.forEach(r => {
+                csv.push(`"${r.email}","${r.status}","${r.reason.replace(/"/g, '""')}"`);
+            });
+            downloadFile('mailprobe-results.csv', csv.join('\n'), 'text/csv');
+        }
+
+        function exportJSON() {
+            const filtered = getFilteredResults();
+            downloadFile('mailprobe-results.json', JSON.stringify(filtered, null, 2), 'application/json');
+        }
+
+        function getFilteredResults() {
+            if (currentFilter === 'all') return currentResults;
+            return currentResults.filter(r => r.status.toLowerCase() === currentFilter);
+        }
+
+        function downloadFile(filename, content, type) {
+            const blob = new Blob([content], { type });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function clearForm() {
+            document.getElementById('emails-input').value = '';
+            document.getElementById('results-section').classList.remove('active');
+            currentResults = [];
+            currentFilter = 'all';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Load mode on page load
+        loadMode();
+    </script>
+</body>
+</html>

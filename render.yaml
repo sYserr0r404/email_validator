@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: mailprobe
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PROBE_HELO_HOST
+        value: mailprobe.render.com
+      - key: PROBE_MAIL_FROM
+        value: verify@mailprobe.local

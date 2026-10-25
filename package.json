@@ -1,0 +1,21 @@
+{
+  "name": "mailprobe",
+  "version": "1.0.0",
+  "description": "Complete email verification with SMTP probing",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": ["email", "validation", "smtp", "verification"],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5"
+  }
+}
