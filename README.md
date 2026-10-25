@@ -14,6 +14,9 @@ MailProbe verifies email addresses through a multi-stage pipeline:
 4. **DNS checks** (MX, A/AAAA, null MX, SPF, DMARC)
 5. **Big provider detection** (Gmail, Outlook, Yahoo, etc.)
 6. **SMTP mailbox probing** (RCPT TO verification on port 25, when available)
+   - **Multiple MX host attempts** - Tries up to 3 MX hosts in priority order
+   - **Automatic retry** - Retries once after 8s on timeout or 5.7.x policy block
+   - **Domain-level rate limiting** - 2 second gap between probes to same domain
 7. **Catch-all detection** (tests random addresses)
 
 Results are classified as **VALID**, **INVALID**, **RISKY**, or **UNKNOWN** with specific reasons.
@@ -25,9 +28,31 @@ Results are classified as **VALID**, **INVALID**, **RISKY**, or **UNKNOWN** with
 | **VALID** | Domain and MX are valid, SMTP server accepted the recipient, domain is not catch-all, provider is not a big consumer service |
 | **INVALID** | Bad syntax, domain doesn't exist, no MX and no A record, null MX (RFC 7505), disposable domain, or SMTP explicitly rejected (550/551/553, 5.1.1/5.1.2/5.1.3) |
 | **RISKY** | Catch-all domain (accepts any address), big provider that doesn't confirm mailboxes (gmail.com, outlook.com, yahoo.com, etc.), or likely typo with suggestion |
-| **UNKNOWN** | SMTP couldn't complete due to timeout, connection refused, port 25 blocked, 4xx greylisting, 421 service unavailable, 5.7.x policy blocks, or STARTTLS failure. Reason is specific (e.g., "Connection timeout to mx1.example.com:25") |
+| **UNKNOWN** | SMTP couldn't complete due to timeout ("Server did not respond"), connection refused, port 25 blocked, 4xx greylisting ("Server asked us to retry later"), 5.7.x policy blocks ("Server blocked the check, try again later"), or STARTTLS failure |
+
+**Plain Language Reasons:**
+- All reasons shown in the UI use plain language, not technical codes
+- Technical details (SMTP codes, MX hosts, attempt counts) are in the JSON export only
+- Examples: "Mailbox does not exist" (not "550 5.1.1"), "Server did not respond" (not "ETIMEDOUT")
 
 **Important:** We never report VALID when SMTP verification didn't run.
+
+## SMTP Resilience
+
+When SMTP verification is available (port 25 not blocked), the app uses aggressive resilience strategies:
+
+1. **Multiple MX hosts** - Tries up to 3 MX hosts in priority order
+2. **Automatic retry** - On timeout or 5.7.x policy block, waits 8 seconds and retries once on the same host
+3. **Domain-level rate limiting** - One probe per domain at a time, with 2 second gap between probes to same domain
+4. **Conclusive results only** - Never changes UNKNOWN to VALID/INVALID without a conclusive SMTP reply
+
+### Exported Data
+
+- **CSV**: Shows email, status, and plain language reason
+- **JSON**: Includes additional `smtpDetails` with:
+  - `mxHost`: Which MX server was used
+  - `attempts`: Number of connection attempts made
+  - `rawReplies`: Array of raw SMTP responses
 
 ## Port 25 Detection & Modes
 

@@ -109,22 +109,37 @@ test('classifies 4xx greylist as UNKNOWN', () => {
     disposable: false,
     dns: { mx: [{ exchange: 'mail.example.com', priority: 10 }] },
     smtp: { accepted: false, code: 450, error: null },
+    domain: 'example.com',
     smtpMode: 'full'
   });
   assert.strictEqual(result.status, 'UNKNOWN');
-  assert.match(result.reason, /temporary|greylist/i);
+  assert.match(result.reason, /retry later/i);
 });
 
-test('classifies SMTP error as UNKNOWN', () => {
+test('classifies SMTP timeout as UNKNOWN', () => {
   const result = classify({
     syntax: { valid: true },
     disposable: false,
     dns: { mx: [{ exchange: 'mail.example.com', priority: 10 }] },
     smtp: { accepted: false, error: 'Connection timeout to mail.example.com:25' },
+    domain: 'example.com',
     smtpMode: 'full'
   });
   assert.strictEqual(result.status, 'UNKNOWN');
-  assert.strictEqual(result.reason, 'Connection timeout to mail.example.com:25');
+  assert.match(result.reason, /did not respond/i);
+});
+
+test('classifies 5.7.x policy block as UNKNOWN', () => {
+  const result = classify({
+    syntax: { valid: true },
+    disposable: false,
+    dns: { mx: [{ exchange: 'mail.example.com', priority: 10 }] },
+    smtp: { accepted: false, code: 550, enhancedCode: '5.7.1', error: null },
+    domain: 'example.com',
+    smtpMode: 'full'
+  });
+  assert.strictEqual(result.status, 'UNKNOWN');
+  assert.match(result.reason, /blocked.*try again/i);
 });
 
 test('classifies verified mailbox as VALID', () => {

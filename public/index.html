@@ -540,7 +540,12 @@
 
         function exportJSON() {
             const filtered = getFilteredResults();
-            downloadFile('mailprobe-results.json', JSON.stringify(filtered, null, 2), 'application/json');
+            // Include SMTP details in JSON export
+            const exportData = filtered.map(r => ({
+                ...r,
+                smtpDetails: r._smtpDetails || undefined
+            }));
+            downloadFile('mailprobe-results.json', JSON.stringify(exportData, null, 2), 'application/json');
         }
 
         function getFilteredResults() {

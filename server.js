@@ -6,7 +6,7 @@ import { validateSyntax, isRoleAccount } from './lib/syntax.js';
 import { checkDNS } from './lib/dns.js';
 import { checkTypo } from './lib/typo.js';
 import { isDisposable } from './lib/disposable.js';
-import { probeMailbox } from './lib/smtp.js';
+import { probeMailboxResilient } from './lib/smtp.js';
 import { classify } from './lib/classify.js';
 import { checkPort25 } from './lib/portcheck.js';
 
@@ -224,7 +224,6 @@ async function checkEmail(email, domainLocks) {
 
       const probePromise = (async () => {
         try {
-          const mxHost = dns.mx[0].exchange;
           const sender = process.env.PROBE_MAIL_FROM;
           
           // 15 second hard timeout per address
@@ -232,8 +231,9 @@ async function checkEmail(email, domainLocks) {
             setTimeout(() => reject(new Error(`Timeout (15s) verifying ${email}`)), 15000)
           );
 
+          // Use resilient probing with multiple MX hosts
           smtp = await Promise.race([
-            probeMailbox(email, mxHost, sender, SMTP_TIMEOUT),
+            probeMailboxResilient(email, dns.mx, sender, SMTP_TIMEOUT),
             timeoutPromise
           ]);
 
@@ -241,6 +241,16 @@ async function checkEmail(email, domainLocks) {
           result.enhancedCode = smtp.enhancedCode;
           result.tls = smtp.tls;
           result.catchAll = smtp.catchAll;
+          
+          // Store additional data for JSON export (not shown in UI)
+          result._smtpDetails = {
+            mxHost: smtp.mxHost,
+            attempts: smtp.attempts?.length || 0,
+            rawReplies: smtp.rawReplies || []
+          };
+
+          // 2 second gap before next probe to same domain
+          await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (err) {
           smtp = { error: err.message, accepted: false };
         }
