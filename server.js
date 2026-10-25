@@ -51,6 +51,11 @@ app.use('/api/', limiter);
   console.log(`   ${port25Status.message}`);
 })();
 
+// Clean up stuck jobs on startup
+for (const [jobId, job] of jobs.entries()) {
+  jobs.delete(jobId);
+}
+
 // Job watchdog
 setInterval(() => {
   const now = Date.now();
@@ -203,7 +208,7 @@ app.get('/api/debug', (req, res) => {
 });
 
 /**
- * Process job queue with per-domain promise chaining
+ * Process job queue with per-domain promise chaining and proper error handling
  */
 async function processJob(jobId) {
   const job = jobs.get(jobId);
@@ -217,41 +222,64 @@ async function processJob(jobId) {
     job.status = 'running';
   }
 
-  while (job.queue.length > 0) {
-    const email = job.queue.shift();
-    const result = job.results.get(email);
-    const domain = email.split('@')[1];
+  try {
+    while (job.queue.length > 0) {
+      const email = job.queue.shift();
+      const result = job.results.get(email);
+      if (!result) continue;
 
-    const domainKey = `${jobId}:${domain}`;
-    let domainChain = job.domainQueues.get(domainKey) || Promise.resolve();
+      const domain = email.split('@')[1];
+      const domainKey = `${jobId}:${domain}`;
+      
+      // Get existing chain or start new one
+      let domainChain = job.domainQueues.get(domainKey);
+      
+      if (!domainChain) {
+        // Start new chain for this domain
+        domainChain = (async () => {
+          result.status = 'CHECKING';
+          try {
+            const verified = await probeEmailWithTimeout(email, job.mode, PROBE_TIMEOUT);
+            Object.assign(result, verified);
+          } catch (err) {
+            result.status = 'UNKNOWN';
+            result.reason = 'Verification error';
+            console.error(`Error checking ${email}:`, err.message);
+          }
+          await new Promise(resolve => setTimeout(resolve, DOMAIN_GAP));
+        })();
+        
+        job.domainQueues.set(domainKey, domainChain);
+        await domainChain;
+      } else {
+        // Chain to existing domain queue
+        const newChain = domainChain
+          .then(async () => {
+            result.status = 'CHECKING';
+            try {
+              const verified = await probeEmailWithTimeout(email, job.mode, PROBE_TIMEOUT);
+              Object.assign(result, verified);
+            } catch (err) {
+              result.status = 'UNKNOWN';
+              result.reason = 'Verification error';
+              console.error(`Error checking ${email}:`, err.message);
+            }
+            await new Promise(resolve => setTimeout(resolve, DOMAIN_GAP));
+          })
+          .catch(err => {
+            console.error(`Chain error for ${email}:`, err);
+            result.status = 'UNKNOWN';
+            result.reason = 'Verification error';
+          });
 
-    domainChain = domainChain
-      .then(async () => {
-        result.status = 'CHECKING';
-
-        try {
-          const verified = await probeEmailWithTimeout(email, job.mode, PROBE_TIMEOUT);
-          Object.assign(result, verified);
-        } catch (err) {
-          result.status = 'UNKNOWN';
-          result.reason = 'Verification error';
-          console.error(`Error checking ${email}:`, err.message);
-        }
-
-        await new Promise(resolve => setTimeout(resolve, DOMAIN_GAP));
-      })
-      .catch(err => {
-        console.error(`Chain error for ${email}:`, err);
-        result.status = 'UNKNOWN';
-        result.reason = 'Verification error';
-      });
-
-    job.domainQueues.set(domainKey, domainChain);
-    await domainChain;
+        job.domainQueues.set(domainKey, newChain);
+        await newChain;
+      }
+    }
+  } finally {
+    job.status = 'done';
+    job.domainQueues.clear();
   }
-
-  job.status = 'done';
-  job.domainQueues.clear();
 }
 
 /**
