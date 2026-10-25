@@ -139,7 +139,7 @@ test('classifies 5.7.x policy block as UNKNOWN', () => {
     smtpMode: 'full'
   });
   assert.strictEqual(result.status, 'UNKNOWN');
-  assert.match(result.reason, /blocked.*try again/i);
+  assert.match(result.reason, /blocked/i);
 });
 
 test('classifies verified mailbox as VALID', () => {

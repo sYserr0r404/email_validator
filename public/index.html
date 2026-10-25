@@ -66,21 +66,6 @@
             color: var(--black);
         }
 
-        .mode-banner button {
-            background: var(--bg);
-            border: 2px solid var(--black);
-            padding: 8px 16px;
-            font-family: 'Space Mono', monospace;
-            font-weight: 700;
-            cursor: pointer;
-            box-shadow: 3px 3px 0 var(--black);
-        }
-
-        .mode-banner button:active {
-            transform: translate(2px, 2px);
-            box-shadow: 1px 1px 0 var(--black);
-        }
-
         .input-section {
             margin-bottom: 30px;
         }
@@ -125,10 +110,6 @@
             margin-bottom: 10px;
         }
 
-        .button:hover {
-            background: #E91E63;
-        }
-
         .button:active {
             transform: translate(2px, 2px);
             box-shadow: 4px 4px 0 var(--black);
@@ -139,17 +120,33 @@
             cursor: not-allowed;
         }
 
-        .button.secondary {
-            background: var(--bg);
-            color: var(--black);
-        }
-
         .results-section {
             display: none;
         }
 
         .results-section.active {
             display: block;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            border: 3px solid var(--black);
+            margin-bottom: 20px;
+            background: white;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--green);
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 12px;
         }
 
         .results-header {
@@ -167,7 +164,7 @@
             flex-wrap: wrap;
         }
 
-        .filter-tab {
+        .filter-btn {
             background: var(--bg);
             border: 3px solid var(--black);
             border-right: none;
@@ -177,25 +174,20 @@
             font-weight: 700;
             text-transform: uppercase;
             cursor: pointer;
-            position: relative;
         }
 
-        .filter-tab:last-child {
+        .filter-btn:last-child {
             border-right: 3px solid var(--black);
         }
 
-        .filter-tab.active {
+        .filter-btn.active {
             background: var(--black);
             color: white;
         }
 
-        .filter-tab .count {
+        .filter-btn .count {
             margin-left: 8px;
             opacity: 0.7;
-        }
-
-        .export-buttons {
-            margin-bottom: 20px;
         }
 
         .results-table-container {
@@ -258,33 +250,10 @@
             text-transform: uppercase;
         }
 
-        .status-badge.valid {
-            background: var(--green);
-            color: white;
-        }
-
-        .status-badge.invalid {
-            background: var(--red);
-            color: white;
-        }
-
-        .status-badge.risky {
-            background: var(--amber);
-            color: white;
-        }
-
-        .status-badge.unknown {
-            background: var(--grey);
-            color: white;
-        }
-
-        .info-box {
-            padding: 15px 20px;
-            border: 2px solid var(--black);
-            background: #E3F2FD;
-            margin-bottom: 20px;
-            font-size: 13px;
-        }
+        .status-badge.valid { background: var(--green); color: white; }
+        .status-badge.invalid { background: var(--red); color: white; }
+        .status-badge.risky { background: var(--amber); color: white; }
+        .status-badge.unknown { background: var(--grey); color: white; }
 
         .loading {
             display: none;
@@ -310,34 +279,6 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-
-        @media (max-width: 768px) {
-            h1 {
-                font-size: 24px;
-            }
-
-            .filters {
-                flex-direction: column;
-            }
-
-            .filter-tab {
-                border-right: 3px solid var(--black);
-                border-bottom: none;
-            }
-
-            .filter-tab:last-child {
-                border-bottom: 3px solid var(--black);
-            }
-
-            .results-table {
-                font-size: 11px;
-            }
-
-            .results-table th,
-            .results-table td {
-                padding: 8px;
-            }
-        }
     </style>
 </head>
 <body>
@@ -346,7 +287,6 @@
 
         <div id="mode-banner" class="mode-banner dns-only">
             <span id="mode-text">Checking port 25 availability...</span>
-            <button onclick="recheckMode()">RE-CHECK</button>
         </div>
 
         <div class="input-section">
@@ -354,7 +294,8 @@
             <textarea id="emails-input" placeholder="example@domain.com&#10;user@company.org&#10;test@example.com"></textarea>
             <br>
             <button class="button" onclick="checkEmails()">CHECK</button>
-            <button class="button secondary" onclick="clearForm()">CLEAR</button>
+            <button class="button" onclick="clearForm()" style="background: var(--bg); color: var(--black); border-color: var(--black);">CLEAR</button>
+            <button class="button" id="retry-btn" onclick="retryUnknown()" style="display: none;">RETRY UNKNOWN</button>
         </div>
 
         <div id="loading" class="loading">
@@ -365,25 +306,21 @@
         <div id="results-section" class="results-section">
             <div class="results-header">VALIDATION RESULTS</div>
 
-            <div class="filters" id="filters">
-                <div class="filter-tab active" data-filter="all" onclick="filterResults('all')">
-                    ALL <span class="count" id="count-all">0</span>
-                </div>
-                <div class="filter-tab" data-filter="valid" onclick="filterResults('valid')">
-                    VALID <span class="count" id="count-valid">0</span>
-                </div>
-                <div class="filter-tab" data-filter="invalid" onclick="filterResults('invalid')">
-                    INVALID <span class="count" id="count-invalid">0</span>
-                </div>
-                <div class="filter-tab" data-filter="risky" onclick="filterResults('risky')">
-                    RISKY <span class="count" id="count-risky">0</span>
-                </div>
-                <div class="filter-tab" data-filter="unknown" onclick="filterResults('unknown')">
-                    UNKNOWN <span class="count" id="count-unknown">0</span>
+            <div id="progress-container" style="display: none;">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill">0%</div>
                 </div>
             </div>
 
-            <div class="export-buttons">
+            <div class="filters">
+                <button class="filter-btn active" data-filter="all" onclick="filterResults('all')">ALL</button>
+                <button class="filter-btn" data-filter="valid" onclick="filterResults('valid')">VALID</button>
+                <button class="filter-btn" data-filter="invalid" onclick="filterResults('invalid')">INVALID</button>
+                <button class="filter-btn" data-filter="risky" onclick="filterResults('risky')">RISKY</button>
+                <button class="filter-btn" data-filter="unknown" onclick="filterResults('unknown')">UNKNOWN</button>
+            </div>
+
+            <div>
                 <button class="button" onclick="exportCSV()">EXPORT CSV</button>
                 <button class="button" onclick="exportJSON()">EXPORT JSON</button>
             </div>
@@ -401,40 +338,25 @@
                     </tbody>
                 </table>
             </div>
-
-            <div class="info-box">
-                <strong>About UNKNOWN results:</strong> UNKNOWN is a normal result when a server blocks or delays verification. It does not mean the address is bad.
-            </div>
         </div>
     </div>
 
     <script>
         let currentResults = [];
         let currentFilter = 'all';
+        let currentJobId = null;
 
-        // Check mode on load
         async function loadMode() {
             try {
                 const response = await fetch('/api/status');
                 const data = await response.json();
-                updateModeBanner(data);
+                const banner = document.getElementById('mode-banner');
+                const text = document.getElementById('mode-text');
+                text.textContent = data.message;
+                banner.className = 'mode-banner ' + (data.mode === 'full' ? 'full' : 'dns-only');
             } catch (error) {
                 console.error('Failed to load mode:', error);
             }
-        }
-
-        function updateModeBanner(data) {
-            const banner = document.getElementById('mode-banner');
-            const text = document.getElementById('mode-text');
-            
-            text.textContent = data.message;
-            banner.className = 'mode-banner ' + (data.mode === 'full' ? 'full' : 'dns-only');
-        }
-
-        async function recheckMode() {
-            const text = document.getElementById('mode-text');
-            text.textContent = 'Rechecking...';
-            await loadMode();
         }
 
         async function checkEmails() {
@@ -444,83 +366,96 @@
                 return;
             }
 
-            const loading = document.getElementById('loading');
-            const resultsSection = document.getElementById('results-section');
-
-            loading.classList.add('active');
-            resultsSection.classList.remove('active');
+            document.getElementById('loading').classList.add('active');
+            document.getElementById('results-section').classList.remove('active');
 
             try {
-                const response = await fetch('/api/check', {
+                const res = await fetch('/api/jobs', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ emails: input })
                 });
 
-                if (!response.ok) {
-                    const error = await response.json();
+                if (!res.ok) {
+                    const error = await res.json();
                     throw new Error(error.error || 'Server error');
                 }
 
-                const data = await response.json();
-                currentResults = data.results;
-                displayResults();
+                const { jobId } = await res.json();
+                currentJobId = jobId;
+                pollJob(jobId);
             } catch (error) {
                 alert('Error: ' + error.message);
-            } finally {
-                loading.classList.remove('active');
+                document.getElementById('loading').classList.remove('active');
             }
+        }
+
+        function pollJob(jobId) {
+            const pollInterval = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/jobs/${jobId}`);
+                    if (!res.ok) throw new Error('Job not found');
+
+                    const job = await res.json();
+                    currentResults = job.results;
+                    displayResults();
+
+                    const percent = job.progress.total > 0 
+                        ? Math.round((job.progress.completed / job.progress.total) * 100)
+                        : 0;
+                    document.getElementById('progress-fill').textContent = percent + '%';
+                    document.getElementById('progress-fill').style.width = percent + '%';
+
+                    if (job.status === 'done') {
+                        clearInterval(pollInterval);
+                        document.getElementById('loading').classList.remove('active');
+                        document.getElementById('retry-btn').style.display = 'inline-block';
+                    }
+                } catch (error) {
+                    console.error('Poll error:', error);
+                    clearInterval(pollInterval);
+                }
+            }, 2000);
         }
 
         function displayResults() {
             const tbody = document.getElementById('results-tbody');
             tbody.innerHTML = '';
 
-            // Count by status
-            const counts = { all: 0, valid: 0, invalid: 0, risky: 0, unknown: 0 };
-            currentResults.forEach(r => {
-                counts.all++;
-                counts[r.status.toLowerCase()]++;
-            });
-
-            // Update counts
-            document.getElementById('count-all').textContent = counts.all;
-            document.getElementById('count-valid').textContent = counts.valid;
-            document.getElementById('count-invalid').textContent = counts.invalid;
-            document.getElementById('count-risky').textContent = counts.risky;
-            document.getElementById('count-unknown').textContent = counts.unknown;
-
-            // Render rows
             currentResults.forEach(result => {
                 const row = document.createElement('tr');
-                row.dataset.status = result.status.toLowerCase();
+                const status = (result.status || 'UNKNOWN').toLowerCase();
+                row.dataset.status = status;
                 
+                let statusBadge = result.status;
+                if (result.status === 'QUEUED' || result.status === 'CHECKING') {
+                    statusBadge = `<span style="opacity: 0.5;">...${result.status}</span>`;
+                } else {
+                    statusBadge = `<span class="status-badge ${status}">${result.status}</span>`;
+                }
+
                 row.innerHTML = `
                     <td style="font-weight: 700;">${escapeHtml(result.email)}</td>
-                    <td><span class="status-badge ${result.status.toLowerCase()}">${result.status}</span></td>
-                    <td>${escapeHtml(result.reason)}</td>
+                    <td>${statusBadge}</td>
+                    <td>${escapeHtml(result.reason || '')}</td>
                 `;
-                
                 tbody.appendChild(row);
             });
 
             document.getElementById('results-section').classList.add('active');
+            document.getElementById('progress-container').style.display = 'block';
             filterResults(currentFilter);
         }
 
         function filterResults(filter) {
             currentFilter = filter;
-            
-            // Update active tab
-            document.querySelectorAll('.filter-tab').forEach(tab => {
-                tab.classList.remove('active');
-                if (tab.dataset.filter === filter) {
-                    tab.classList.add('active');
-                }
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('active');
             });
+            event.target.classList.add('active');
 
-            // Filter rows
-            document.querySelectorAll('#results-tbody tr').forEach(row => {
+            const rows = document.querySelectorAll('#results-tbody tr');
+            rows.forEach(row => {
                 if (filter === 'all' || row.dataset.status === filter) {
                     row.style.display = '';
                 } else {
@@ -529,28 +464,26 @@
             });
         }
 
+        async function retryUnknown() {
+            if (!currentJobId) return;
+            const res = await fetch(`/api/jobs/${currentJobId}/retry-unknown`, { method: 'POST' });
+            const data = await res.json();
+            if (data.count > 0) {
+                document.getElementById('loading').classList.add('active');
+                pollJob(currentJobId);
+            }
+        }
+
         function exportCSV() {
-            const filtered = getFilteredResults();
             const csv = ['Email,Status,Reason'];
-            filtered.forEach(r => {
-                csv.push(`"${r.email}","${r.status}","${r.reason.replace(/"/g, '""')}"`);
+            currentResults.forEach(r => {
+                csv.push(`"${r.email}","${r.status}","${(r.reason || '').replace(/"/g, '""')}"`);
             });
             downloadFile('mailprobe-results.csv', csv.join('\n'), 'text/csv');
         }
 
         function exportJSON() {
-            const filtered = getFilteredResults();
-            // Include SMTP details in JSON export
-            const exportData = filtered.map(r => ({
-                ...r,
-                smtpDetails: r._smtpDetails || undefined
-            }));
-            downloadFile('mailprobe-results.json', JSON.stringify(exportData, null, 2), 'application/json');
-        }
-
-        function getFilteredResults() {
-            if (currentFilter === 'all') return currentResults;
-            return currentResults.filter(r => r.status.toLowerCase() === currentFilter);
+            downloadFile('mailprobe-results.json', JSON.stringify(currentResults, null, 2), 'application/json');
         }
 
         function downloadFile(filename, content, type) {
@@ -566,8 +499,10 @@
         function clearForm() {
             document.getElementById('emails-input').value = '';
             document.getElementById('results-section').classList.remove('active');
+            document.getElementById('loading').classList.remove('active');
+            document.getElementById('retry-btn').style.display = 'none';
             currentResults = [];
-            currentFilter = 'all';
+            currentJobId = null;
         }
 
         function escapeHtml(text) {
@@ -576,7 +511,6 @@
             return div.innerHTML;
         }
 
-        // Load mode on page load
         loadMode();
     </script>
 </body>
