@@ -2,108 +2,414 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import https from 'https';
-import http from 'http';
+import { randomUUID } from 'crypto';
+import { validateSyntax, isRoleAccount } from './lib/syntax.js';
+import { checkDNS } from './lib/dns.js';
+import { checkTypo } from './lib/typo.js';
+import { isDisposable } from './lib/disposable.js';
+import { probeMailboxResilient } from './lib/smtp.js';
+import { classify } from './lib/classify.js';
+import { checkPort25 } from './lib/portcheck.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const PROBE_SERVER_URL = process.env.PROBE_SERVER_URL || 'http://localhost:3001';
-const PROBE_TOKEN = process.env.PROBE_TOKEN || 'dev-token';
+const PROBE_TIMEOUT = parseInt(process.env.PROBE_TIMEOUT_MS || '20000');
+const JOB_MAX_MS = parseInt(process.env.JOB_MAX_MS || '600000');
+const DOMAIN_GAP = 2000;
+
+// Job store
+const jobs = new Map();
+const domainQueues = new Map();
+
+let smtpMode = 'checking';
+let port25Status = null;
 
 // Middleware
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Rate limiting (applies to both Vercel and local dev)
+// Rate limiting
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
-  message: { error: 'Too many requests. Please wait a moment and try again.' },
+  message: { error: 'Too many requests' },
   standardHeaders: true,
   legacyHeaders: false
 });
 
 app.use('/api/', limiter);
 
-// Forward request to probe server
-async function forwardToProbe(req, res, method, path, body = null) {
-  return new Promise((resolve) => {
-    const url = new URL(PROBE_SERVER_URL);
-    url.pathname = `/api${path}`;
+// Check port 25 on startup
+(async () => {
+  console.log('🔍 Checking outbound port 25 availability...');
+  port25Status = await checkPort25();
+  smtpMode = port25Status.available ? 'full' : 'dns-only';
+  console.log(`📧 Mode: ${smtpMode.toUpperCase()}`);
+  console.log(`   ${port25Status.message}`);
+})();
 
-    const options = {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-probe-token': PROBE_TOKEN
+// Job watchdog
+setInterval(() => {
+  const now = Date.now();
+  for (const [jobId, job] of jobs.entries()) {
+    if (job.status !== 'done' && (now - job.createdAt) > JOB_MAX_MS) {
+      job.status = 'done';
+      for (const [email, result] of job.results.entries()) {
+        if (result.status === 'QUEUED' || result.status === 'CHECKING') {
+          result.status = 'UNKNOWN';
+          result.reason = 'Job timed out. Retry.';
+        }
       }
-    };
+    }
+  }
+}, 30000);
 
-    const protocol = url.protocol === 'https:' ? https : http;
-    const proxyReq = protocol.request(url, options, (proxyRes) => {
-      let data = '';
-      proxyRes.on('data', chunk => data += chunk);
-      proxyRes.on('end', () => {
-        res.status(proxyRes.statusCode);
-        res.set(proxyRes.headers);
-        res.send(data);
-        resolve();
+// GET /api/status
+app.get('/api/status', (req, res) => {
+  res.json({
+    mode: smtpMode,
+    smtpAvailable: smtpMode === 'full',
+    message: port25Status?.message || 'Checking...',
+    checkedAt: port25Status?.testedAt || null
+  });
+});
+
+// POST /api/jobs
+app.post('/api/jobs', (req, res) => {
+  try {
+    let { emails } = req.body;
+
+    if (typeof emails === 'string') {
+      emails = emails
+        .split(/[\n,;]+/)
+        .flatMap(e => e.split(/\s+/))
+        .map(e => e.trim())
+        .filter(e => e.length > 0);
+    }
+
+    if (!Array.isArray(emails) || emails.length === 0) {
+      return res.status(400).json({ error: 'No emails provided' });
+    }
+
+    emails = [...new Set(emails)];
+    if (emails.length > 50) {
+      return res.status(400).json({ error: 'Max 50 emails per job' });
+    }
+
+    const jobId = randomUUID();
+    const emailMap = new Map();
+    emails.forEach(email => {
+      emailMap.set(email, {
+        email,
+        status: 'QUEUED',
+        reason: 'Waiting to verify...',
+        mx: null,
+        smtpCode: null,
+        enhancedCode: null,
+        tls: false,
+        catchAll: false,
+        disposable: false,
+        role: false,
+        typoSuggestion: null,
+        spf: false,
+        dmarc: false
       });
     });
 
-    proxyReq.on('error', (err) => {
-      console.error('Probe server error:', err);
-      res.status(503).json({ error: 'Probe server unavailable' });
-      resolve();
-    });
+    const job = {
+      jobId,
+      status: 'queued',
+      results: emailMap,
+      queue: [...emails],
+      domainQueues: new Map(),
+      startedAt: null,
+      createdAt: Date.now(),
+      mode: smtpMode
+    };
 
-    proxyReq.setTimeout(25000); // 20s probe + buffer
-    if (body) {
-      proxyReq.write(JSON.stringify(body));
-    }
-    proxyReq.end();
+    jobs.set(jobId, job);
+    processJob(jobId).catch(err => console.error(`Job ${jobId} error:`, err));
+
+    res.json({ jobId });
+  } catch (error) {
+    console.error('Job creation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /api/jobs/:id
+app.get('/api/jobs/:id', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  const results = Array.from(job.results.values());
+  const pending = results.filter(r => r.status === 'QUEUED' || r.status === 'CHECKING').length;
+
+  res.json({
+    jobId: job.jobId,
+    status: job.status,
+    results,
+    pending,
+    startedAt: job.startedAt,
+    createdAt: job.createdAt
   });
+});
+
+// POST /api/jobs/:id/retry-unknown
+app.post('/api/jobs/:id/retry-unknown', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  const unknowns = Array.from(job.results.values())
+    .filter(r => r.status === 'UNKNOWN')
+    .map(r => r.email);
+
+  if (unknowns.length === 0) {
+    return res.json({ message: 'No UNKNOWN results', count: 0 });
+  }
+
+  unknowns.forEach(email => {
+    job.queue.push(email);
+    job.results.get(email).status = 'QUEUED';
+    job.results.get(email).reason = 'Retrying...';
+  });
+
+  job.status = 'queued';
+  processJob(req.params.id).catch(err => console.error(`Retry error:`, err));
+
+  res.json({ message: 'Retrying UNKNOWN', count: unknowns.length });
+});
+
+// GET /api/debug
+app.get('/api/debug', (req, res) => {
+  const queues = {};
+  for (const [domain, queue] of domainQueues.entries()) {
+    queues[domain] = queue._pending || 0;
+  }
+
+  res.json({
+    activeJobs: jobs.size,
+    activeDomains: domainQueues.size,
+    domainQueues: queues,
+    smtpMode
+  });
+});
+
+/**
+ * Process job queue with per-domain promise chaining
+ */
+async function processJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return;
+
+  if (!job.startedAt) {
+    job.startedAt = Date.now();
+  }
+
+  if (job.status === 'queued') {
+    job.status = 'running';
+  }
+
+  while (job.queue.length > 0) {
+    const email = job.queue.shift();
+    const result = job.results.get(email);
+    const domain = email.split('@')[1];
+
+    const domainKey = `${jobId}:${domain}`;
+    let domainChain = job.domainQueues.get(domainKey) || Promise.resolve();
+
+    domainChain = domainChain
+      .then(async () => {
+        result.status = 'CHECKING';
+
+        try {
+          const verified = await probeEmailWithTimeout(email, job.mode, PROBE_TIMEOUT);
+          Object.assign(result, verified);
+        } catch (err) {
+          result.status = 'UNKNOWN';
+          result.reason = 'Verification error';
+          console.error(`Error checking ${email}:`, err.message);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, DOMAIN_GAP));
+      })
+      .catch(err => {
+        console.error(`Chain error for ${email}:`, err);
+        result.status = 'UNKNOWN';
+        result.reason = 'Verification error';
+      });
+
+    job.domainQueues.set(domainKey, domainChain);
+    await domainChain;
+  }
+
+  job.status = 'done';
+  job.domainQueues.clear();
 }
 
-// GET /api/status - Local status only (don't need to forward)
-app.get('/api/status', (req, res) => {
-  res.json({
-    mode: 'delegated',
-    message: 'Requests forwarded to probe server',
-    probeServerUrl: PROBE_SERVER_URL
-  });
-});
+/**
+ * Probe email with hard timeout
+ */
+async function probeEmailWithTimeout(email, mode, timeoutMs) {
+  const result = {
+    email,
+    status: 'UNKNOWN',
+    reason: '',
+    mx: null,
+    smtpCode: null,
+    enhancedCode: null,
+    tls: false,
+    catchAll: false,
+    disposable: false,
+    role: false,
+    typoSuggestion: null,
+    spf: false,
+    dmarc: false
+  };
 
-// POST /api/jobs - Forward to probe server
-app.post('/api/jobs', async (req, res) => {
-  await forwardToProbe(req, res, 'POST', '/jobs', req.body);
-});
+  try {
+    const syntax = validateSyntax(email);
+    if (!syntax.valid) {
+      const { status, reason } = classify({ syntax, smtpMode: mode });
+      result.status = status;
+      result.reason = reason;
+      return result;
+    }
 
-// GET /api/jobs/:id - Forward to probe server
-app.get('/api/jobs/:id', async (req, res) => {
-  await forwardToProbe(req, res, 'GET', `/jobs/${req.params.id}`);
-});
+    const { local, domain } = syntax;
+    result.role = isRoleAccount(local);
 
-// POST /api/jobs/:id/retry-unknown - Forward to probe server
-app.post('/api/jobs/:id/retry-unknown', async (req, res) => {
-  await forwardToProbe(req, res, 'POST', `/jobs/${req.params.id}/retry-unknown`, req.body);
-});
+    result.disposable = isDisposable(domain);
+    if (result.disposable) {
+      const { status, reason } = classify({ syntax, disposable: true, smtpMode: mode });
+      result.status = status;
+      result.reason = reason;
+      return result;
+    }
 
-// POST /api/check (legacy) - Forward to probe server
-app.post('/api/check', async (req, res) => {
-  await forwardToProbe(req, res, 'POST', '/jobs', req.body);
-});
+    const typo = await checkTypo(email);
+    result.typoSuggestion = typo.suggestion;
+    if (typo.suggestion) {
+      const { status, reason } = classify({ 
+        syntax, 
+        disposable: false, 
+        typoSuggestion: typo.suggestion,
+        smtpMode: mode 
+      });
+      result.status = status;
+      result.reason = reason;
+      return result;
+    }
 
-// Serve index.html for root
+    const dns = await checkDNS(domain);
+    result.spf = !!dns.spf;
+    result.dmarc = !!dns.dmarc;
+
+    if (dns.error || dns.mx.length === 0) {
+      const { status, reason } = classify({ 
+        syntax, 
+        disposable: false, 
+        typoSuggestion: null,
+        dns,
+        smtpMode: mode 
+      });
+      result.status = status;
+      result.reason = reason;
+      return result;
+    }
+
+    result.mx = dns.mx[0].exchange;
+
+    const bigProviders = [
+      'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com',
+      'live.com', 'yahoo.com', 'icloud.com', 'protonmail.com'
+    ];
+
+    if (bigProviders.includes(domain)) {
+      const { status, reason } = classify({ 
+        syntax, 
+        disposable: false, 
+        typoSuggestion: null,
+        dns,
+        domain,
+        smtpMode: mode 
+      });
+      result.status = status;
+      result.reason = reason;
+      return result;
+    }
+
+    let smtp = null;
+    if (mode === 'full') {
+      let timedOut = false;
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+      }, timeoutMs);
+
+      try {
+        const sender = process.env.PROBE_MAIL_FROM;
+        smtp = await probeMailboxResilient(email, dns.mx, sender, timeoutMs);
+
+        if (timedOut) {
+          throw new Error('Server did not respond');
+        }
+
+        result.smtpCode = smtp.code;
+        result.enhancedCode = smtp.enhancedCode;
+        result.tls = smtp.tls;
+        result.catchAll = smtp.catchAll;
+        result._smtpDetails = {
+          mxHost: smtp.mxHost,
+          attempts: smtp.attempts?.length || 0,
+          rawReplies: smtp.rawReplies || []
+        };
+      } catch (err) {
+        if (timedOut) {
+          smtp = { error: 'Server did not respond', accepted: false };
+        } else {
+          smtp = { error: err.message, accepted: false };
+        }
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
+    }
+
+    const { status, reason } = classify({ 
+      syntax, 
+      disposable: false, 
+      typoSuggestion: null,
+      dns,
+      smtp,
+      domain,
+      smtpMode: mode 
+    });
+
+    result.status = status;
+    result.reason = reason;
+
+  } catch (error) {
+    console.error(`Error checking ${email}:`, error);
+    result.status = 'UNKNOWN';
+    result.reason = 'Verification error';
+  }
+
+  return result;
+}
+
+// Serve index.html
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`✅ Vercel proxy running on port ${PORT}`);
-  console.log(`📧 Forwarding to probe server: ${PROBE_SERVER_URL}`);
+  console.log(`✅ MailProbe running on port ${PORT}`);
+  console.log(`📧 Visit: http://localhost:${PORT}`);
 });
