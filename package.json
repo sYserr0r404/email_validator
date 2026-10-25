@@ -6,6 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:probe": "node probe-server.js",
+    "dev": "concurrently \"node probe-server.js\" \"node server.js\"",
     "test": "node --test test/*.test.js"
   },
   "keywords": ["email", "validation", "smtp", "verification"],

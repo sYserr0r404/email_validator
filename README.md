@@ -54,7 +54,92 @@ When SMTP verification is available (port 25 not blocked), the app uses aggressi
   - `attempts`: Number of connection attempts made
   - `rawReplies`: Array of raw SMTP responses
 
-## Port 25 Detection & Modes
+## Deployment Architecture
+
+MailProbe uses a **two-tier architecture** for reliability and scalability:
+
+### Vercel / Public Layer (`server.js`)
+- Receives requests from users
+- Forwards to probe server (never runs probes itself)
+- No job state, no queues
+- Scales horizontally easily
+- Fast response times
+
+### Probe Server (`probe-server.js`)
+- Long-running Node.js process on VPS
+- Handles all SMTP probing and queuing
+- Per-domain queuing (promise chains)
+- Job watchdog (600s max per job)
+- Hard timeouts (20s per probe)
+
+```
+User Browser
+    ↓ POST /api/jobs
+Vercel (server.js) 
+    ↓ x-probe-token header
+Probe Server (probe-server.js)
+    ↓ (queues work, respects timeouts)
+    ↓ Per-domain promise chains
+SMTP Servers
+```
+
+### Local Development
+
+```bash
+# Terminal 1: Probe server
+npm run start:probe
+
+# Terminal 2: Main server  
+npm run start
+
+# Or both:
+npm run dev
+```
+
+### Production (Heroku/Render)
+
+**Main Server (Vercel/Render):**
+```bash
+PORT=3000
+PROBE_SERVER_URL=https://probe.example.com
+PROBE_TOKEN=secret-token
+npm start
+```
+
+**Probe Server (VPS with port 25):**
+```bash
+PROBE_PORT=3001
+PROBE_TOKEN=secret-token
+PROBE_TIMEOUT_MS=20000
+JOB_MAX_MS=600000
+node probe-server.js
+```
+
+## Queue Reliability
+
+### Per-Domain Queuing
+- One probe per domain at a time
+- Implemented as **promise chains** (not concurrent)
+- Each link catches errors to prevent blocking later probes
+- 2 second gap between probes to same domain
+
+### Hard Timeout Protection
+- Every probe wrapped in 20 second timeout
+- Socket destroyed on timeout
+- Address marked UNKNOWN: "Server did not respond. You can retry."
+- Timer starts only when probe begins (not during queue wait)
+
+### Job Watchdog
+- Any job exceeding 600 seconds is closed
+- Unfinished addresses marked UNKNOWN: "Job timed out. Retry."
+- Checks every 30 seconds
+
+### Diagnostics
+- `GET /api/debug` (token required)
+- Returns active domain queues and pending counts
+- Use to diagnose stalls or stuck probes
+
+## API
 
 On startup, MailProbe tests outbound TCP connections to port 25 on two public MX hosts:
 - `gmail-smtp-in.l.google.com:25`
