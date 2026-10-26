@@ -1,13 +1,13 @@
 services:
   - type: web
     name: mailprobe
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python server.py
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PROBE_HELO_HOST
-        value: mailprobe.render.com
-      - key: PROBE_MAIL_FROM
-        value: verify@mailprobe.local
+      - key: PROBE_TIMEOUT_MS
+        value: "20000"
+      - key: JOB_MAX_MS
+        value: "600000"
