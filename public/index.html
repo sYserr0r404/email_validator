@@ -345,6 +345,7 @@
         let currentResults = [];
         let currentFilter = 'all';
         let currentJobId = null;
+        let pollToken = 0;
 
         async function loadMode() {
             try {
@@ -391,10 +392,23 @@
         }
 
         function pollJob(jobId) {
-            const pollInterval = setInterval(async () => {
+            const token = ++pollToken;
+            const poll = async () => {
+                if (token !== pollToken || jobId !== currentJobId) return;
                 try {
                     const res = await fetch(`/api/jobs/${jobId}`);
-                    if (!res.ok) throw new Error('Job not found');
+                    if (res.status === 429) {
+                        console.warn('Polling rate limited; will retry on the next interval.');
+                        setTimeout(poll, 3000);
+                        return;
+                    }
+                    if (res.status === 404) {
+                        console.error('Job not found. The server may have restarted.');
+                        document.getElementById('loading').classList.remove('active');
+                        alert('This verification job expired because the server restarted. Please run the check again.');
+                        return;
+                    }
+                    if (!res.ok) throw new Error(`Job request failed (${res.status})`);
 
                     const job = await res.json();
                     currentResults = job.results;
@@ -407,15 +421,20 @@
                     document.getElementById('progress-fill').style.width = percent + '%';
 
                     if (job.status === 'done') {
-                        clearInterval(pollInterval);
                         document.getElementById('loading').classList.remove('active');
                         document.getElementById('retry-btn').style.display = 'inline-block';
+                        return;
                     }
                 } catch (error) {
                     console.error('Poll error:', error);
-                    clearInterval(pollInterval);
+                    const loadingText = document.querySelector('#loading div:last-child');
+                    loadingText.textContent = 'Waiting for the local server...';
                 }
-            }, 2000);
+                // Poll immediately, then wait between requests. This avoids the
+                // initial 10-second blank pause and prevents overlapping polls.
+                setTimeout(poll, 2000);
+            };
+            poll();
         }
 
         function displayResults() {
@@ -449,10 +468,12 @@
 
         function filterResults(filter) {
             currentFilter = filter;
-            document.querySelectorAll('.filter-btn').forEach(btn => {
+            const filterButtons = document.querySelectorAll('.filter-btn');
+            filterButtons.forEach(btn => {
                 btn.classList.remove('active');
             });
-            event.target.classList.add('active');
+            const activeButton = Array.from(filterButtons).find(btn => btn.dataset.filter === filter);
+            if (activeButton) activeButton.classList.add('active');
 
             const rows = document.querySelectorAll('#results-tbody tr');
             rows.forEach(row => {

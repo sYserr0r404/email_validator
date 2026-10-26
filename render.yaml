@@ -1,9 +1,9 @@
 services:
   - type: web
     name: mailprobe
-    runtime: node
-    buildCommand: npm install
-    startCommand: npm start
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
     envVars:
       - key: NODE_ENV
         value: production

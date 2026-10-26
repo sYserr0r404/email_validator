@@ -1,397 +1,64 @@
-# 📧 MailProbe - Email Verification
+# MailProbe
 
-Complete email verification service with SMTP probing, DNS validation, and honest result classification.
+MailProbe is a local email-address checker. The primary server is Python; it serves the browser UI and runs verification jobs. The UI uses a small amount of JavaScript for background progress updates.
 
-![MailProbe Screenshot](screenshot.png)
+## Checks
 
-## What It Does
+- Email syntax and IDN domain validation
+- Common disposable-domain detection
+- Common domain typo suggestions
+- DNS MX, A/AAAA fallback, SPF, and DMARC lookups
+- SMTP recipient checks against MX hosts, ordered by priority (up to three hosts)
+- Optional catch-all detection
+- Per-address timeouts and per-domain serialization
 
-MailProbe verifies email addresses through a multi-stage pipeline:
+MailProbe never sends an email or issues SMTP `DATA`. SMTP verification can return `UNKNOWN` when the receiving host blocks or declines probes. `UNKNOWN` does not mean an address is fake. IMAP and POP3 are mailbox access protocols; they require account authentication and cannot verify arbitrary addresses without credentials.
 
-1. **Syntax validation** (RFC 5321/5322, IDN support, length limits)
-2. **Disposable domain detection** (10k+ known providers)
-3. **Typo suggestions** (did you mean gmail.com?)
-4. **DNS checks** (MX, A/AAAA, null MX, SPF, DMARC)
-5. **Big provider detection** (Gmail, Outlook, Yahoo, etc.)
-6. **SMTP mailbox probing** (RCPT TO verification on port 25, when available)
-   - **Multiple MX host attempts** - Tries up to 3 MX hosts in priority order
-   - **Automatic retry** - Retries once after 8s on timeout or 5.7.x policy block
-   - **Domain-level rate limiting** - 2 second gap between probes to same domain
-7. **Catch-all detection** (tests random addresses)
+## Run locally
 
-Results are classified as **VALID**, **INVALID**, **RISKY**, or **UNKNOWN** with specific reasons.
+Requirements: Python 3.10 or newer.
 
-## Status Classification
-
-| Status | Rules |
-|--------|-------|
-| **VALID** | Domain and MX are valid, SMTP server accepted the recipient, domain is not catch-all, provider is not a big consumer service |
-| **INVALID** | Bad syntax, domain doesn't exist, no MX and no A record, null MX (RFC 7505), disposable domain, or SMTP explicitly rejected (550/551/553, 5.1.1/5.1.2/5.1.3) |
-| **RISKY** | Catch-all domain (accepts any address), big provider that doesn't confirm mailboxes (gmail.com, outlook.com, yahoo.com, etc.), or likely typo with suggestion |
-| **UNKNOWN** | SMTP couldn't complete due to timeout ("Server did not respond"), connection refused, port 25 blocked, 4xx greylisting ("Server asked us to retry later"), 5.7.x policy blocks ("Server blocked the check, try again later"), or STARTTLS failure |
-
-**Plain Language Reasons:**
-- All reasons shown in the UI use plain language, not technical codes
-- Technical details (SMTP codes, MX hosts, attempt counts) are in the JSON export only
-- Examples: "Mailbox does not exist" (not "550 5.1.1"), "Server did not respond" (not "ETIMEDOUT")
-
-**Important:** We never report VALID when SMTP verification didn't run.
-
-## SMTP Resilience
-
-When SMTP verification is available (port 25 not blocked), the app uses aggressive resilience strategies:
-
-1. **Multiple MX hosts** - Tries up to 3 MX hosts in priority order
-2. **Automatic retry** - On timeout or 5.7.x policy block, waits 8 seconds and retries once on the same host
-3. **Domain-level rate limiting** - One probe per domain at a time, with 2 second gap between probes to same domain
-4. **Conclusive results only** - Never changes UNKNOWN to VALID/INVALID without a conclusive SMTP reply
-
-### Exported Data
-
-- **CSV**: Shows email, status, and plain language reason
-- **JSON**: Includes additional `smtpDetails` with:
-  - `mxHost`: Which MX server was used
-  - `attempts`: Number of connection attempts made
-  - `rawReplies`: Array of raw SMTP responses
-
-## Deployment Architecture
-
-MailProbe uses a **two-tier architecture** for reliability and scalability:
-
-### Vercel / Public Layer (`server.js`)
-- Receives requests from users
-- Forwards to probe server (never runs probes itself)
-- No job state, no queues
-- Scales horizontally easily
-- Fast response times
-
-### Probe Server (`probe-server.js`)
-- Long-running Node.js process on VPS
-- Handles all SMTP probing and queuing
-- Per-domain queuing (promise chains)
-- Job watchdog (600s max per job)
-- Hard timeouts (20s per probe)
-
-```
-User Browser
-    ↓ POST /api/jobs
-Vercel (server.js) 
-    ↓ x-probe-token header
-Probe Server (probe-server.js)
-    ↓ (queues work, respects timeouts)
-    ↓ Per-domain promise chains
-SMTP Servers
+```powershell
+python -m pip install -r requirements.txt
+python server.py
 ```
 
-### Local Development
+Open <http://localhost:3000>. To use another port, set `PORT` before starting the server.
 
-```bash
-# Terminal 1: Probe server
-npm run start:probe
-
-# Terminal 2: Main server  
-npm run start
-
-# Or both:
-npm run dev
+```powershell
+$env:PORT = "3001"
+python server.py
 ```
 
-### Production (Heroku/Render)
+Environment variables:
 
-**Main Server (Vercel/Render):**
-```bash
-PORT=3000
-PROBE_SERVER_URL=https://probe.example.com
-PROBE_TOKEN=secret-token
-npm start
-```
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP port for the app |
+| `PROBE_TIMEOUT_MS` | `20000` | Total SMTP probe deadline per address |
+| `PROBE_HELO_HOST` | `mailprobe.local` | Name sent in SMTP EHLO |
+| `PROBE_MAIL_FROM` | `verify@mailprobe.local` | Envelope sender used for the check |
+| `DNS_NAMESERVERS` | `1.1.1.1,8.8.8.8` when the OS exposes none | Comma-separated DNS resolver IPs |
 
-**Probe Server (VPS with port 25):**
-```bash
-PROBE_PORT=3001
-PROBE_TOKEN=secret-token
-PROBE_TIMEOUT_MS=20000
-JOB_MAX_MS=600000
-node probe-server.js
-```
+The server checks outbound port 25 at startup. If it cannot connect, it continues in DNS-only mode and marks mailbox-level checks `UNKNOWN`.
 
-## Queue Reliability
+## DNS setup
 
-### Per-Domain Queuing
-- One probe per domain at a time
-- Implemented as **promise chains** (not concurrent)
-- Each link catches errors to prevent blocking later probes
-- 2 second gap between probes to same domain
-
-### Hard Timeout Protection
-- Every probe wrapped in 20 second timeout
-- Socket destroyed on timeout
-- Address marked UNKNOWN: "Server did not respond. You can retry."
-- Timer starts only when probe begins (not during queue wait)
-
-### Job Watchdog
-- Any job exceeding 600 seconds is closed
-- Unfinished addresses marked UNKNOWN: "Job timed out. Retry."
-- Checks every 30 seconds
-
-### Diagnostics
-- `GET /api/debug` (token required)
-- Returns active domain queues and pending counts
-- Use to diagnose stalls or stuck probes
+For a domain to receive email, configure the MX records supplied by its email provider. MailProbe uses published MX records first. If there are no MX records, it follows SMTP's implicit-MX fallback to the domain's A/AAAA address; a web proxy or website address may not accept SMTP. The correct MX values depend on the provider, so get them from that provider before changing DNS.
 
 ## API
 
-On startup, MailProbe tests outbound TCP connections to port 25 on two public MX hosts:
-- `gmail-smtp-in.l.google.com:25`
-- `outlook-com.olc.protection.outlook.com:25`
+- `GET /api/status` — SMTP mode and diagnostic message
+- `POST /api/jobs` — create a job with `{"emails": ["person@example.com"]}` or a delimited string
+- `GET /api/jobs/{jobId}` — status, results, and progress
+- `POST /api/jobs/{jobId}/retry-unknown` — retry `UNKNOWN` results
 
-If both fail (5 second timeout each), the app runs in **DNS-only mode**:
-- Syntax, typo, disposable, MX, SPF, and DMARC checks run normally
-- Addresses that need SMTP verification are marked **UNKNOWN** with reason: "Outbound port 25 is blocked on this server, so the mailbox could not be verified."
-- The UI shows an amber banner explaining the limitation
-
-If port 25 is accessible, **full SMTP verification** runs with mailbox-level checks.
-
-### Test Port 25 Yourself
-
-```bash
-nc -vz -w 5 gmail-smtp-in.l.google.com 25
-```
-
-If this times out or is refused, port 25 is blocked.
-
-## Local Setup
-
-### Prerequisites
-- Node.js 20+
-- npm
-
-### Installation
-
-```bash
-# Install dependencies
-npm install
-
-# Set environment variables (optional)
-export PROBE_HELO_HOST=mailprobe.yourdomain.com
-export PROBE_MAIL_FROM=verify@yourdomain.com
-export SMTP_TIMEOUT_MS=8000
-export PORT=3000
-
-# Start the server
-npm start
-```
-
-Visit `http://localhost:3000`
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server port | `3000` |
-| `PROBE_HELO_HOST` | Domain for EHLO command | `mailprobe.local` |
-| `PROBE_MAIL_FROM` | Sender address for MAIL FROM | `verify@mailprobe.local` |
-| `SMTP_TIMEOUT_MS` | SMTP operation timeout | `8000` |
+A job accepts up to 50 addresses. Job state is held in memory and is cleared when the server restarts.
 
 ## Deployment
 
-### GitHub
+The included `render.yaml` deploys the Python server. Many managed hosts block outbound port 25; on those hosts the app still performs DNS checks but cannot confirm mailboxes. For full SMTP checks, use a host that permits outbound port 25.
 
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/mailprobe.git
-git push -u origin main
-```
+## Legacy Node server
 
-### Render (Web Service)
-
-**Note:** Render blocks outbound port 25, so the app runs in DNS-only mode there.
-
-1. Go to [dashboard.render.com](https://dashboard.render.com)
-2. New + → Web Service
-3. Connect your GitHub repository
-4. Settings:
-   - **Environment:** Node
-   - **Build Command:** `npm install`
-   - **Start Command:** `npm start`
-5. Add environment variables (optional):
-   - `PROBE_HELO_HOST`: your domain
-   - `PROBE_MAIL_FROM`: your email
-6. Create Web Service
-
-### VPS (Ubuntu) with Full SMTP
-
-For **full verification**, deploy on a VPS where port 25 is unblocked:
-
-```bash
-# Install Node.js 20+
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# Clone and install
-git clone https://github.com/YOUR_USERNAME/mailprobe.git
-cd mailprobe
-npm install
-
-# Set environment variables
-export PROBE_HELO_HOST=mail.yourdomain.com
-export PROBE_MAIL_FROM=verify@yourdomain.com
-export PORT=3000
-
-# Install PM2 for process management
-sudo npm install -g pm2
-
-# Start with PM2
-pm2 start server.js --name mailprobe
-pm2 save
-pm2 startup
-```
-
-**Important:** Most VPS providers (AWS, Google Cloud, DigitalOcean, Linode) block port 25 by default to prevent spam. You must request they unblock it by opening a support ticket. Some providers (AWS EC2) require you to fill out a "Request to Remove Email Sending Limitations" form.
-
-### Test Port 25 on Your Server
-
-```bash
-nc -vz -w 5 gmail-smtp-in.l.google.com 25
-telnet gmail-smtp-in.l.google.com 25
-```
-
-## Deployment Limits
-
-**Free hosting platforms block port 25:**
-- Render ❌
-- Railway ❌
-- Heroku ❌
-- Vercel ❌
-- Netlify ❌
-
-Result: DNS-only mode. Addresses needing SMTP are marked UNKNOWN.
-
-**VPS with port 25 unblocking:**
-- DigitalOcean ✓ (request unblock)
-- Linode ✓ (request unblock)
-- Vultr ✓ (request unblock)
-- AWS EC2 ✓ (fill out form)
-- Google Cloud ✓ (request unblock)
-
-Result: Full SMTP verification.
-
-## API
-
-### GET /api/status
-
-Returns current verification mode.
-
-**Response:**
-```json
-{
-  "mode": "full" | "dns-only",
-  "smtpAvailable": true | false,
-  "message": "Full SMTP verification active",
-  "checkedAt": "2024-10-25T12:00:00.000Z"
-}
-```
-
-### POST /api/check
-
-Verify email addresses.
-
-**Request:**
-```json
-{
-  "emails": [
-    "user@example.com",
-    "test@domain.org"
-  ]
-}
-```
-
-Or send a string with newlines/commas/semicolons:
-```json
-{
-  "emails": "user@example.com\ntest@domain.org"
-}
-```
-
-**Limits:**
-- Maximum 50 addresses per request
-- Rate limit: 10 requests per minute per IP
-- 15 second timeout per address
-- Concurrency: 5 addresses at a time
-- One SMTP probe per domain at a time
-
-**Response:**
-```json
-{
-  "mode": "full",
-  "results": [
-    {
-      "email": "user@example.com",
-      "status": "VALID",
-      "reason": "Mailbox verified",
-      "mx": "mail.example.com",
-      "smtpCode": 250,
-      "enhancedCode": "2.1.5",
-      "tls": true,
-      "catchAll": false,
-      "disposable": false,
-      "role": false,
-      "typoSuggestion": null,
-      "spf": true,
-      "dmarc": true
-    }
-  ]
-}
-```
-
-## No-Sending Guarantee
-
-**MailProbe never sends DATA.** The SMTP probe stops after RCPT TO and immediately sends RSET then QUIT.
-
-This is enforced in code:
-- `lib/smtp.js` has an `ALLOWED_COMMANDS` list: `['EHLO', 'STARTTLS', 'MAIL', 'RCPT', 'RSET', 'QUIT']`
-- `sendCommand()` throws an error if any other command is attempted
-- Tests verify DATA is never sent
-
-## Why UNKNOWN is Valid
-
-UNKNOWN results are **expected** and **normal**:
-
-1. **Port 25 blocked:** Most cloud hosts block it to prevent spam
-2. **Greylisting:** Servers delay first-time senders with 4xx codes (450, 451)
-3. **Policy blocks:** 5.7.x codes mean "we don't verify for strangers"
-4. **Timeouts:** Servers may be slow or rate-limit probes
-5. **Connection refused:** Servers may block datacenter IPs
-
-**UNKNOWN does not mean invalid.** It means verification couldn't complete. The address may be perfectly good.
-
-## Tests
-
-Run tests with:
-
-```bash
-npm test
-```
-
-Tests cover:
-- Syntax validation (RFC compliance, IDN, length limits)
-- Status classification from SMTP codes and enhanced codes
-- Catch-all detection logic
-- Port 25 blocking simulation (ETIMEDOUT, ECONNREFUSED)
-- Command guard (DATA is forbidden)
-- Fake SMTP server scenarios (accepted, rejected 550, greylisted 450, timeout, catch-all)
-
-**No real mail servers are contacted in tests.** Only addresses I own or `example.invalid` are used.
-
-## Credits
-
-Email verification logic adapted from [deep-email-validator](https://github.com/mfbx9da4/deep-email-validator) v0.1.23 (MIT License, David Alberto Adler).
-
-Regex patterns, typo checking (mailcheck), disposable domains (disposable-email-domains), and MX fallback logic are based on that library.
-
-## License
-
-MIT
+`server.js` and `probe-server.js` remain as legacy implementations and are not used by the Python app. The supported local entry point is `python server.py` (`npm start` also invokes it if Node/npm are already installed).

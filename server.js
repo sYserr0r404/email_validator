@@ -160,6 +160,7 @@ app.get('/api/jobs/:id', (req, res) => {
     status: job.status,
     results,
     pending,
+    progress: { total: results.length, completed: results.length - pending },
     startedAt: job.startedAt,
     createdAt: job.createdAt
   });
@@ -268,6 +269,39 @@ async function processJob(jobId) {
  * Probe email with hard timeout
  */
 async function probeEmailWithTimeout(email, mode, timeoutMs) {
+  let timeoutHandle;
+  let stage = 'DNS lookup';
+  try {
+    return await Promise.race([
+      probeEmail(email, mode, timeoutMs, value => { stage = value; }),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error('Verification timed out')), timeoutMs);
+      })
+    ]);
+  } catch (err) {
+    return {
+      email,
+      status: 'UNKNOWN',
+      reason: stage.startsWith('SMTP')
+        ? `${stage} did not respond. The mailbox could not be confirmed; check the domain's MX records and email provider.`
+        : 'Domain DNS lookup did not respond. The mailbox could not be confirmed; you can retry.',
+      mx: null,
+      smtpCode: null,
+      enhancedCode: null,
+      tls: false,
+      catchAll: false,
+      disposable: false,
+      role: false,
+      typoSuggestion: null,
+      spf: false,
+      dmarc: false
+    };
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+async function probeEmail(email, mode, timeoutMs, setStage = () => {}) {
   const result = {
     email,
     status: 'UNKNOWN',
@@ -318,6 +352,7 @@ async function probeEmailWithTimeout(email, mode, timeoutMs) {
       return result;
     }
 
+    setStage('DNS lookup');
     const dns = await checkDNS(domain);
     result.spf = !!dns.spf;
     result.dmarc = !!dns.dmarc;
@@ -358,6 +393,7 @@ async function probeEmailWithTimeout(email, mode, timeoutMs) {
 
     let smtp = null;
     if (mode === 'full') {
+      setStage(`SMTP check at ${dns.mx[0].exchange}${dns.mxRecordFound ? '' : ' (no MX record; using domain A record)'}`);
       let timedOut = false;
       const timeoutHandle = setTimeout(() => {
         timedOut = true;
