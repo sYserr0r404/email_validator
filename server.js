@@ -19,6 +19,7 @@ const PORT = process.env.PORT || 3000;
 const PROBE_TIMEOUT = parseInt(process.env.PROBE_TIMEOUT_MS || '20000');
 const JOB_MAX_MS = parseInt(process.env.JOB_MAX_MS || '600000');
 const DOMAIN_GAP = 2000;
+const EMAILABLE_API_KEY = process.env.EMAILABLE_API_KEY?.trim();
 
 // Job store
 const jobs = new Map();
@@ -42,10 +43,34 @@ const limiter = rateLimit({
 
 app.use('/api/', limiter);
 
-// Check port 25 on startup
+// Check port 25 on startup (non-blocking with timeout)
+let checkStarted = false;
 (async () => {
+  if (checkStarted) return;
+  checkStarted = true;
+
+  if (EMAILABLE_API_KEY) {
+    smtpMode = 'api';
+    port25Status = {
+      available: true,
+      message: 'Emailable verification API configured. Mailbox checks use HTTPS through the provider.',
+      testedAt: new Date().toISOString()
+    };
+    console.log(`📧 Mode: API (Emailable)`);
+    return;
+  }
+  
   console.log('🔍 Checking outbound port 25 availability...');
-  port25Status = await checkPort25();
+  try {
+    // Add 5-second timeout to prevent hanging on Render
+    const timeoutPromise = new Promise((resolve) => 
+      setTimeout(() => resolve({ available: false, message: 'Port check timeout', testedAt: new Date() }), 5000)
+    );
+    port25Status = await Promise.race([checkPort25(), timeoutPromise]);
+  } catch (err) {
+    port25Status = { available: false, message: 'Port check failed', testedAt: new Date() };
+  }
+  
   smtpMode = port25Status.available ? 'full' : 'dns-only';
   console.log(`📧 Mode: ${smtpMode.toUpperCase()}`);
   console.log(`   ${port25Status.message}`);
@@ -76,7 +101,7 @@ setInterval(() => {
 app.get('/api/status', (req, res) => {
   res.json({
     mode: smtpMode,
-    smtpAvailable: smtpMode === 'full',
+    smtpAvailable: smtpMode === 'full' || smtpMode === 'api',
     message: port25Status?.message || 'Checking...',
     checkedAt: port25Status?.testedAt || null
   });
@@ -352,6 +377,13 @@ async function probeEmail(email, mode, timeoutMs, setStage = () => {}) {
       return result;
     }
 
+    if (EMAILABLE_API_KEY) {
+      setStage('Emailable verification API');
+      const apiResult = await verifyWithEmailable(email, timeoutMs);
+      Object.assign(result, apiResult, { email });
+      return result;
+    }
+
     setStage('DNS lookup');
     const dns = await checkDNS(domain);
     result.spf = !!dns.spf;
@@ -447,6 +479,80 @@ async function probeEmail(email, mode, timeoutMs, setStage = () => {}) {
   }
 
   return result;
+}
+
+/** Verify a mailbox through Emailable's API so the Render app does not need
+ * direct outbound SMTP access. The private API key stays server-side. */
+async function verifyWithEmailable(email, timeoutMs) {
+  const url = new URL('https://api.emailable.com/v1/verify');
+  url.searchParams.set('email', email);
+  url.searchParams.set('smtp', 'true');
+  url.searchParams.set('timeout', String(Math.max(3, Math.floor(timeoutMs / 1000))));
+
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${EMAILABLE_API_KEY}`,
+        Accept: 'application/json'
+      },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (error) {
+    const reason = error.name === 'TimeoutError' || error.name === 'AbortError'
+      ? 'Emailable verification timed out. You can retry.'
+      : 'Could not reach the Emailable verification service. You can retry.';
+    return { status: 'UNKNOWN', reason };
+  }
+
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    return { status: 'UNKNOWN', reason: 'Emailable returned an unreadable response. You can retry.' };
+  }
+
+  if (!response.ok) {
+    const reason = response.status === 401 || response.status === 403
+      ? 'Emailable rejected the API key. Check the server-side API key in Render.'
+      : response.status === 402
+        ? 'Emailable has no available verification credits.'
+        : response.status === 249 || response.status === 408 || response.status === 504
+          ? 'Emailable verification timed out. You can retry.'
+          : `Emailable verification failed (HTTP ${response.status}). You can retry.`;
+    return { status: 'UNKNOWN', reason };
+  }
+
+  const state = String(data.state || '').toLowerCase();
+  const catchAll = data.accept_all === true;
+  let status = 'UNKNOWN';
+  let reason = 'Emailable could not confirm this mailbox. You can retry.';
+  if (state === 'deliverable') {
+    status = catchAll ? 'RISKY' : 'VALID';
+    reason = catchAll
+      ? 'Emailable reports this domain accepts all addresses; this mailbox is unconfirmed.'
+      : 'Emailable reports this mailbox is deliverable.';
+  } else if (state === 'undeliverable') {
+    status = 'INVALID';
+    reason = 'Emailable reports this mailbox is undeliverable.';
+  } else if (state === 'risky') {
+    status = 'RISKY';
+    reason = 'Emailable reports this address as risky.';
+  }
+
+  return {
+    status,
+    reason,
+    mx: data.mx_record || undefined,
+    catchAll,
+    disposable: data.disposable === true,
+    role: data.role === true,
+    verificationProvider: 'Emailable',
+    verificationState: state || 'unknown',
+    verificationScore: data.score !== null && data.score !== undefined && Number.isFinite(Number(data.score))
+      ? Number(data.score)
+      : null
+  };
 }
 
 // Serve index.html

@@ -1,64 +1,45 @@
 # MailProbe
 
-MailProbe is a local email-address checker. The primary server is Python; it serves the browser UI and runs verification jobs. The UI uses a small amount of JavaScript for background progress updates.
-
-## Checks
-
-- Email syntax and IDN domain validation
-- Common disposable-domain detection
-- Common domain typo suggestions
-- DNS MX, A/AAAA fallback, SPF, and DMARC lookups
-- SMTP recipient checks against MX hosts, ordered by priority (up to three hosts)
-- Optional catch-all detection
-- Per-address timeouts and per-domain serialization
-
-MailProbe never sends an email or issues SMTP `DATA`. SMTP verification can return `UNKNOWN` when the receiving host blocks or declines probes. `UNKNOWN` does not mean an address is fake. IMAP and POP3 are mailbox access protocols; they require account authentication and cannot verify arbitrary addresses without credentials.
+MailProbe is a Node.js email-checking web app. It checks email syntax, common typos and disposable domains, DNS/MX, SPF, and DMARC. It can also check mailbox deliverability through the Emailable API when configured.
 
 ## Run locally
 
-Requirements: Python 3.10 or newer.
+Requirements: Node.js 20 or newer.
 
 ```powershell
-python -m pip install -r requirements.txt
-python server.py
+npm install
+npm start
 ```
 
-Open <http://localhost:3000>. To use another port, set `PORT` before starting the server.
+Open <http://localhost:3000>. To use another port:
 
 ```powershell
 $env:PORT = "3001"
-python server.py
+npm start
 ```
 
-Environment variables:
+## Add mailbox verification on Render
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `3000` | HTTP port for the app |
-| `PROBE_TIMEOUT_MS` | `20000` | Total SMTP probe deadline per address |
-| `PROBE_HELO_HOST` | `mailprobe.local` | Name sent in SMTP EHLO |
-| `PROBE_MAIL_FROM` | `verify@mailprobe.local` | Envelope sender used for the check |
-| `DNS_NAMESERVERS` | `1.1.1.1,8.8.8.8` when the OS exposes none | Comma-separated DNS resolver IPs |
+Render blocks outbound SMTP port 25. Without an external verification provider, the app can check DNS and address format but must report mailbox existence as `UNKNOWN`.
 
-The server checks outbound port 25 at startup. If it cannot connect, it continues in DNS-only mode and marks mailbox-level checks `UNKNOWN`.
+Emailable offers 250 free credits for a new account. A live API request uses one credit per email; a test key returns simulated results and does not perform real mailbox checks. See [Emailable's API docs](https://emailable.com/docs/api/emails/) and [free-account guide](https://emailable.com/docs/getting-started/create-an-account/).
 
-## DNS setup
+1. Create an Emailable account and confirm your account email. This does not send an OTP to the addresses being checked.
+2. In the Emailable dashboard, create a **Live Private API key**. Keep it secret; test keys simulate results.
+3. Push this project's latest code to the repository connected to Render and wait for the deploy to finish.
+4. In Render, open the service, choose **Environment**, and add `EMAILABLE_API_KEY` with your live private key as its value.
+5. Save the environment change and wait for Render to restart the service.
+6. Refresh the site. Its status banner should say that Emailable verification is configured. Run a check to use the provider's SMTP verification over HTTPS.
 
-For a domain to receive email, configure the MX records supplied by its email provider. MailProbe uses published MX records first. If there are no MX records, it follows SMTP's implicit-MX fallback to the domain's A/AAAA address; a web proxy or website address may not accept SMTP. The correct MX values depend on the provider, so get them from that provider before changing DNS.
+The API key is read only by the Node server and is never sent to the browser. Email addresses submitted for API verification are sent to Emailable over HTTPS. Do not put the key in `public/index.html`, commit it to Git, or paste it into chat.
+
+If `EMAILABLE_API_KEY` is absent, MailProbe uses its existing local DNS/SMTP checks. If Emailable returns an unknown or risky result, MailProbe preserves that result instead of guessing that the mailbox is valid or fake. Catch-all mail domains may not allow any provider to confirm individual mailboxes.
 
 ## API
 
-- `GET /api/status` — SMTP mode and diagnostic message
+- `GET /api/status` — current verification mode
 - `POST /api/jobs` — create a job with `{"emails": ["person@example.com"]}` or a delimited string
 - `GET /api/jobs/{jobId}` — status, results, and progress
 - `POST /api/jobs/{jobId}/retry-unknown` — retry `UNKNOWN` results
 
-A job accepts up to 50 addresses. Job state is held in memory and is cleared when the server restarts.
-
-## Deployment
-
-The included `render.yaml` deploys the Python server. Many managed hosts block outbound port 25; on those hosts the app still performs DNS checks but cannot confirm mailboxes. For full SMTP checks, use a host that permits outbound port 25.
-
-## Legacy Node server
-
-`server.js` and `probe-server.js` remain as legacy implementations and are not used by the Python app. The supported local entry point is `python server.py` (`npm start` also invokes it if Node/npm are already installed).
+A job accepts up to 50 addresses. Job state is kept in memory and cleared when the server restarts.

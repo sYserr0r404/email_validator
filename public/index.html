@@ -61,6 +61,11 @@
             color: white;
         }
 
+        .mode-banner.api {
+            background: var(--green);
+            color: white;
+        }
+
         .mode-banner.dns-only {
             background: var(--amber);
             color: var(--black);
@@ -286,7 +291,7 @@
         <h1>📧 MailProbe</h1>
 
         <div id="mode-banner" class="mode-banner dns-only">
-            <span id="mode-text">Checking port 25 availability...</span>
+            <span id="mode-text">Checking verification service...</span>
         </div>
 
         <div class="input-section">
@@ -354,7 +359,8 @@
                 const banner = document.getElementById('mode-banner');
                 const text = document.getElementById('mode-text');
                 text.textContent = data.message;
-                banner.className = 'mode-banner ' + (data.mode === 'full' ? 'full' : 'dns-only');
+                const modeClass = data.mode === 'api' ? 'api' : data.mode === 'full' ? 'full' : 'dns-only';
+                banner.className = 'mode-banner ' + modeClass;
             } catch (error) {
                 console.error('Failed to load mode:', error);
             }
