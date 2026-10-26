@@ -28,6 +28,9 @@ const domainQueues = new Map();
 let smtpMode = 'checking';
 let port25Status = null;
 
+// Trust proxy - required for Render, Vercel, Railway, etc.
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));

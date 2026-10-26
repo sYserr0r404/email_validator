@@ -29,6 +29,9 @@ const domainQueues = new Map();
 let smtpMode = 'checking';
 let port25Status = null;
 
+// Trust proxy - required for cloud deployments
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(express.json({ limit: '1mb' }));
 
