@@ -1,19 +1,21 @@
 {
   "name": "mailprobe",
   "version": "1.0.0",
-  "description": "Python-powered email verification with DNS and SMTP probing",
+  "description": "Complete email verification with SMTP probing, RFC 5321/5322 validation, DNS checks, and background job processing",
   "type": "module",
-  "main": "server.py",
+  "main": "server.js",
   "scripts": {
-    "start": "python server.py",
-    "start:legacy": "node server.js",
-    "start:probe:legacy": "node probe-server.js",
-    "dev": "python server.py",
+    "start": "node server.js",
+    "start:probe": "node probe-server.js",
+    "dev": "concurrently \"node probe-server.js\" \"node server.js\"",
     "test": "node --test test/*.test.js"
   },
-  "keywords": ["email", "validation", "smtp", "verification"],
+  "keywords": ["email", "validation", "smtp", "verification", "deliverability"],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5"
