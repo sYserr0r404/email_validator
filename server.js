@@ -208,7 +208,7 @@ app.get('/api/debug', (req, res) => {
 });
 
 /**
- * Process job queue with per-domain promise chaining and proper error handling
+ * Process job queue with per-domain sequential processing
  */
 async function processJob(jobId) {
   const job = jobs.get(jobId);
@@ -223,59 +223,41 @@ async function processJob(jobId) {
   }
 
   try {
-    while (job.queue.length > 0) {
-      const email = job.queue.shift();
-      const result = job.results.get(email);
-      if (!result) continue;
-
+    // Group emails by domain
+    const emailsByDomain = new Map();
+    for (const email of job.queue) {
       const domain = email.split('@')[1];
-      const domainKey = `${jobId}:${domain}`;
-      
-      // Get existing chain or start new one
-      let domainChain = job.domainQueues.get(domainKey);
-      
-      if (!domainChain) {
-        // Start new chain for this domain
-        domainChain = (async () => {
-          result.status = 'CHECKING';
-          try {
-            const verified = await probeEmailWithTimeout(email, job.mode, PROBE_TIMEOUT);
-            Object.assign(result, verified);
-          } catch (err) {
-            result.status = 'UNKNOWN';
-            result.reason = 'Verification error';
-            console.error(`Error checking ${email}:`, err.message);
-          }
-          await new Promise(resolve => setTimeout(resolve, DOMAIN_GAP));
-        })();
-        
-        job.domainQueues.set(domainKey, domainChain);
-        await domainChain;
-      } else {
-        // Chain to existing domain queue
-        const newChain = domainChain
-          .then(async () => {
-            result.status = 'CHECKING';
-            try {
-              const verified = await probeEmailWithTimeout(email, job.mode, PROBE_TIMEOUT);
-              Object.assign(result, verified);
-            } catch (err) {
-              result.status = 'UNKNOWN';
-              result.reason = 'Verification error';
-              console.error(`Error checking ${email}:`, err.message);
-            }
-            await new Promise(resolve => setTimeout(resolve, DOMAIN_GAP));
-          })
-          .catch(err => {
-            console.error(`Chain error for ${email}:`, err);
-            result.status = 'UNKNOWN';
-            result.reason = 'Verification error';
-          });
+      if (!emailsByDomain.has(domain)) {
+        emailsByDomain.set(domain, []);
+      }
+      emailsByDomain.get(domain).push(email);
+    }
 
-        job.domainQueues.set(domainKey, newChain);
-        await newChain;
+    // Process each domain sequentially
+    for (const [domain, emails] of emailsByDomain.entries()) {
+      for (const email of emails) {
+        const result = job.results.get(email);
+        if (!result) continue;
+
+        result.status = 'CHECKING';
+        try {
+          const verified = await probeEmailWithTimeout(email, job.mode, PROBE_TIMEOUT);
+          Object.assign(result, verified);
+        } catch (err) {
+          result.status = 'UNKNOWN';
+          result.reason = 'Verification error';
+          console.error(`Error checking ${email}:`, err.message);
+        }
+
+        // Gap between emails in same domain
+        await new Promise(resolve => setTimeout(resolve, DOMAIN_GAP));
       }
     }
+
+    // Clear queue
+    job.queue.length = 0;
+  } catch (err) {
+    console.error(`Job ${jobId} processing error:`, err);
   } finally {
     job.status = 'done';
     job.domainQueues.clear();
