@@ -487,7 +487,8 @@ async function verifyWithEmailable(email, timeoutMs) {
   const url = new URL('https://api.emailable.com/v1/verify');
   url.searchParams.set('email', email);
   url.searchParams.set('smtp', 'true');
-  url.searchParams.set('timeout', String(Math.max(3, Math.floor(timeoutMs / 1000))));
+  // Emailable documents a 2-10 second range for its single-email timeout.
+  url.searchParams.set('timeout', String(Math.min(10, Math.max(2, Math.floor(timeoutMs / 1000)))));
 
   let response;
   try {
@@ -524,6 +525,21 @@ async function verifyWithEmailable(email, timeoutMs) {
   }
 
   const state = String(data.state || '').toLowerCase();
+  const providerReason = String(data.reason || '').toLowerCase();
+  const reasonDescriptions = {
+    no_connect: 'Emailable could not connect to the destination mail server',
+    timeout: 'the DNS or mail-server check timed out',
+    unavailable_smtp: 'the destination mail server was temporarily unavailable',
+    unexpected_error: 'Emailable encountered an unexpected verification error',
+    rejected_email: 'the destination mail server rejected the address',
+    accepted_email: 'the destination mail server accepted the address',
+    invalid_email: 'the address did not pass email-format checks',
+    invalid_domain: 'the email domain could not be verified for mail',
+    invalid_smtp: 'the mail server returned an invalid SMTP response',
+    low_deliverability: 'deliverability could not be confirmed with high confidence',
+    low_quality: 'the address was flagged as low quality'
+  };
+  const providerReasonText = reasonDescriptions[providerReason] || '';
   const catchAll = data.accept_all === true;
   let status = 'UNKNOWN';
   let reason = 'Emailable could not confirm this mailbox. You can retry.';
@@ -534,10 +550,16 @@ async function verifyWithEmailable(email, timeoutMs) {
       : 'Emailable reports this mailbox is deliverable.';
   } else if (state === 'undeliverable') {
     status = 'INVALID';
-    reason = 'Emailable reports this mailbox is undeliverable.';
+    reason = providerReasonText
+      ? `Emailable reports this mailbox is undeliverable: ${providerReasonText}.`
+      : 'Emailable reports this mailbox is undeliverable.';
   } else if (state === 'risky') {
     status = 'RISKY';
-    reason = 'Emailable reports this address as risky.';
+    reason = providerReasonText
+      ? `Emailable reports this address as risky: ${providerReasonText}.`
+      : 'Emailable reports this address as risky.';
+  } else if (providerReasonText) {
+    reason = `Emailable could not confirm this mailbox because ${providerReasonText}.`;
   }
 
   return {
